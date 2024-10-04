@@ -5,7 +5,6 @@ https://spring.io/projects/spring-data-redis
 ## RedisTemplate快速入门
 
 https://start.spring.io/
-https://github.com/feed981/e01/tree/feed01/Redis/redis-demo
 
 依赖
 ```xml
@@ -68,9 +67,9 @@ class RedisDemoApplicationTests {
 ## 总结
 
 SpringDataRedis的使用步骤:
-1、spring-boot-starter-data-redis
-2、在application.yml配置Redis信息
-3、注入Redistemplate_
+1. spring-boot-starter-data-redis
+2. 在application.yml配置Redis信息
+3. 注入Redistemplate_
 
 
 ## 存在的问题
@@ -90,7 +89,11 @@ SpringDataRedis的使用步骤:
  9) "name"
 ```
 
-Spring Data Redis 中的 RedisTemplate 在默认情况下使用 JdkSerializationRedisSerializer，它会将 Java 对象序列化为字节数组（基于 JDK 的序列化机制），因此你会看到类似 \xac\xed\x00\x05t\x00\x04name 这样的格式。这是 JDK 序列化的二进制表示方式。
+Spring Data Redis 中的 RedisTemplate 在默认情况下使用 JdkSerializationRedisSerializer，
+
+它会将 Java 对象序列化为字节数组（基于 JDK 的序列化机制），
+
+因此你会看到类似 \xac\xed\x00\x05t\x00\x04name 这样的格式。这是 JDK 序列化的二进制表示方式。
 
 ## RedisTemplate RedisSerializer
 
@@ -196,6 +199,7 @@ class RedisDemoApplicationTests {
 ```
 
 ## 存在的问题
+
 为了在反序列化时知道对象的类型,JSON序列化器会将类的class类型写入json结果中,存入Redis,会带来额外的内存开销。
 
 ```json
@@ -209,6 +213,7 @@ class RedisDemoApplicationTests {
 ```
 
 ## 如何解决
+
 为了节省内存空间,我们并不会使用JSON序列化器来处理value,而是统一使用String序列化器,要求只能存储String类型的key和value。当需要存储java对象时,手动完成对象的序列化和反序列化。
 
 # StringRedisTemplate
@@ -269,11 +274,12 @@ class RedisDemoApplicationTests2 {
 ```
 
 # RedisTemplate的两种序列化实践方案:
+
 方案一:
-1、自定义Redistemplate
-2、修改RedisTemplate的序列化器为GenericJackson2JsonRedisSerializer
+1. 自定义Redistemplate
+2. 修改RedisTemplate的序列化器为GenericJackson2JsonRedisSerializer
 
 方案二:
-1、使用StringRedistemplate
-2、写入Redis时,手动把对象序列化为JSON
-3、读取Redis时,手动把读取到的JSON反序列化为对象
+1. 使用StringRedistemplate
+2. 写入Redis时,手动把对象序列化为JSON
+3. 读取Redis时,手动把读取到的JSON反序列化为对象
