@@ -1,50 +1,3 @@
-
-```mermaid
-sequenceDiagram
-    participant 前端
-    participant 拦截器
-    participant ThreadLocal
-    participant 客户端
-    participant 数据库
-    participant Redis
-
-    loop 发送短信验证码
-        前端->>客户端: 提交手机号
-        客户端->>客户端: 效验手机号(手机格式)
-        loop 手机号格式错误
-          客户端->>前端: 返回错误信息: <br>手机号格式错误!，请用户重新提交手机号
-        end
-        loop 手机号格式正确
-          客户端->>客户端: 生成验证码  <br>RandomUtil.randomNumbers(6)
-          客户端->>Redis: 保存验证码到redis <br>set key vale ex 120
-          客户端->>前端: 发送验证码(这边是印在console) 
-        end  
-    end
-
-    loop 短信验证码登陆/注册
-      前端->>客户端: 提交手机号、验证码
-      loop 格式错误
-        客户端->>前端: 返回错误信息: <br>手机号格式错误!，请用户重新提交手机号
-      客户端->>前端: 返回错误信息: <br>验证码错误!，回到步驟1 发送短信验证码
-      end
-      loop 根据手机号查询用户
-        客户端->>数据库: 存在，随机生成 token 作为登陆令牌 <br>UUID.randomUUID().toString()
-        客户端->>数据库: 不存在，创建新用户并保存
-        客户端->>Redis: 将数据库查询到用户资讯转DTO后 <br>key: token value: dto + TTL
-      end
-    end
-
-    loop 效验登陆状态 (implements HandlerInterceptor 登入的拦截器)
-    note right of 拦截器: 这边有两个拦截器在implements WebMvcConfigurer设置<br> 1是有挡登陆后的请求 2是所有请求
-      前端->>拦截器: 获取请求头中的token，这边是设置了axios interceptor <br>所以才能 request.getHeader("authorization");
-      拦截器->>拦截器: 基于token 获取redis中的用户
-      拦截器->>ThreadLocal: 存在，保存用户信息
-      拦截器->>Redis: 更新 token 存活时间 <br>( 这属于拦截器2所有请求 <br>避免不需要登陆的请求会没刷新 token存活时间)
-      拦截器->>ThreadLocal: 移除用户<br>afterCompletion() <br>用户业务执行完毕，<br>销毁用户信息避免内存泄漏，
-    end
-```
-
-
 # 发送短信验证码
 
 
@@ -699,4 +652,52 @@ public class MvcConfig implements WebMvcConfigurer {
                 ).order(1);
     }
 }
+```
+
+# 总结
+
+
+```mermaid
+sequenceDiagram
+    participant 前端
+    participant 拦截器
+    participant ThreadLocal
+    participant 客户端
+    participant 数据库
+    participant Redis
+
+    loop 发送短信验证码
+        前端->>客户端: 提交手机号
+        客户端->>客户端: 效验手机号(手机格式)
+        loop 手机号格式错误
+          客户端->>前端: 返回错误信息: <br>手机号格式错误!，请用户重新提交手机号
+        end
+        loop 手机号格式正确
+          客户端->>客户端: 生成验证码  <br>RandomUtil.randomNumbers(6)
+          客户端->>Redis: 保存验证码到redis <br>set key vale ex 120
+          客户端->>前端: 发送验证码(这边是印在console) 
+        end  
+    end
+
+    loop 短信验证码登陆/注册
+      前端->>客户端: 提交手机号、验证码
+      loop 格式错误
+        客户端->>前端: 返回错误信息: <br>手机号格式错误!，请用户重新提交手机号
+      客户端->>前端: 返回错误信息: <br>验证码错误!，回到步驟1 发送短信验证码
+      end
+      loop 根据手机号查询用户
+        客户端->>数据库: 存在，随机生成 token 作为登陆令牌 <br>UUID.randomUUID().toString()
+        客户端->>数据库: 不存在，创建新用户并保存
+        客户端->>Redis: 将数据库查询到用户资讯转DTO后 <br>key: token value: dto + TTL
+      end
+    end
+
+    loop 效验登陆状态 (implements HandlerInterceptor 登入的拦截器)
+    note right of 拦截器: 这边有两个拦截器在implements WebMvcConfigurer设置<br> 1是有挡登陆后的请求 2是所有请求
+      前端->>拦截器: 获取请求头中的token，这边是设置了axios interceptor <br>所以才能 request.getHeader("authorization");
+      拦截器->>拦截器: 基于token 获取redis中的用户
+      拦截器->>ThreadLocal: 存在，保存用户信息
+      拦截器->>Redis: 更新 token 存活时间 <br>( 这属于拦截器2所有请求 <br>避免不需要登陆的请求会没刷新 token存活时间)
+      拦截器->>ThreadLocal: 移除用户<br>afterCompletion() <br>用户业务执行完毕，<br>销毁用户信息避免内存泄漏，
+    end
 ```
