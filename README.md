@@ -94,10 +94,10 @@ public class JedisTest {
 ## 总结
 
 Jedis使用的基本步骤:
-1、引入依赖
-2、创建Jedis对象,建立连接
-3、使用Jedis,方法名与Redis命令一致
-4、释放资源
+1. 引入依赖
+2. 创建Jedis对象,建立连接
+3. 使用Jedis,方法名与Redis命令一致
+4. 释放资源
 
 # Jedis连接池
 jedis本身是线程不安全的,并且频繁的创建和销毁连接会有性能损耗,因此我们推荐大家使用Jedis连接池代替Jedis的直连方式。
