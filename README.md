@@ -487,7 +487,8 @@ sequenceDiagram
 	客户端->>Redis: 从redis 获取验证码并效验
 	客户端->>前端: 验证码错误<br>返回错误信息<br>需要重新发送短信验证码
         客户端->>数据库: 根据手机号查询用户<br>query().eq("phone" ,phone).one()
-        客户端->>Redis: 存在，生成 token 作为登陆令牌<br>保存用户信息到redis
+        客户端->>客户端: 存在，生成 token 作为登陆令牌<br>UUID.randomUUID().toString()
+	客户端->>Redis: 保存用户信息到redis<br>stringRedisTemplate.opsForHash().putAll()<br>更新 token 存活时间<br> stringRedisTemplate.expire()
         客户端->>数据库: 不存在，创建新用户并保存<br>save(user)
         客户端->>前端: Result.ok()
 ```
