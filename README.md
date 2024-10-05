@@ -1,5 +1,21 @@
 # 添加商户缓存
 
+```mermaid
+sequenceDiagram
+    participant 前端
+    participant 客户端
+    participant Redis
+    participant 数据库
+
+	前端->>客户端: 提交商铺id <br>/api/shop/{id}
+	客户端->>Redis: 从redis 查商铺缓存
+	  客户端->>前端: redis存在，直接返回商户信息 Result.ok(shop)
+	  客户端->>数据库: 不存在，查数据库
+	  客户端->>前端: 不存在，返回错误信息 Result.fail("店铺不存在")
+	  客户端->>Redis: 存在，存redis
+	  客户端->>前端: 返回商户信息 Result.ok(shop)
+```
+
 1. 首次访问时将数据库查到的商户跟商品类型相关信息先存到redis ，这样访问时命中redis时就不会再去访问数据库
 
 商户
@@ -202,6 +218,22 @@ public class ShopTypeServiceImpl extends ServiceImpl<ShopTypeMapper, ShopType> i
 
 # 实现商铺缓存与数据库的双写一致
 
+```mermaid
+sequenceDiagram
+    participant 前端
+    participant 客户端
+    participant Redis
+    participant 数据库
+	
+前端->>客户端: 修改商铺信息<br>PUT /api/shop
+客户端->>数据库: 通过id查商户信息
+客户端->>前端: 不存在，返回错误信息<br>Result.fail("店铺不能为空")
+客户端->>数据库: 存在，根据id 更新商铺信息<br> updateById()
+客户端->>Redis: 删除 redis DEL key
+客户端->>前端:返回 Result.ok()
+前端->>客户端: 查询时会访问 提交商铺id <br>/api/shop/{id} 就会走上面的流程
+```
+
 给查询商铺的缓存添加超时剔除和主动更新的策略
 
 修改ShopController中的业务逻辑,满足下面的需求:
@@ -310,6 +342,7 @@ select * from tb_shop ts ;
 
 # 缓存穿透
 
+
 缓存穿透是指客户端请求的数据在缓存中和数据库中都不存在,这样缓存永远不会生效,这些请求都会打到数据库。
 常见的解决方案有两种:
 1. 缓存空对象
@@ -326,6 +359,26 @@ select * from tb_shop ts ;
 
 
 ## 编码解决商铺查询的缓存穿透问题
+
+
+```mermaid
+sequenceDiagram
+    participant 前端
+    participant 客户端
+    participant Redis
+    participant 数据库
+	
+前端->>客户端: 提交商铺id <br>/api/shop/{id}
+客户端->>Redis: 从redis 查商铺缓存
+客户端->>前端: redis存在，直接返回商户信息 Result.ok(shop)
+客户端->>Redis: 不存在，查缓存是否空值
+客户端->>前端: 不是null(那94空值)<br>返回错误信息 Result.fail("店铺信息不存在")
+客户端->>数据库: redis是null，查数据库
+客户端->>Redis: 存在，存redis
+客户端->>前端: 返回商户信息 Result.ok(shop)
+客户端->>Redis: 不存在，存redis 写入空值避免访问数据库
+客户端->>前端: 返回错误信息 Result.fail("店铺不存在")
+```
 
 1. 访问时查数据库，不存在则需要存空值到redis
 2. 访问时多一个查看redis是否为空值的动作
@@ -498,6 +551,30 @@ OK
 ```
 
 ## 加上互斥锁
+
+```mermaid
+sequenceDiagram
+    participant 前端
+    participant 客户端
+    participant Redis
+    participant 数据库
+
+前端->>客户端: 提交商铺id <br>/api/shop/{id}
+客户端->>Redis: 从redis 查商铺缓存
+客户端->>客户端: redis存在，直接返回 shop
+客户端->>Redis: 不存在，查缓存是否空值
+客户端->>客户端: 不是null(那94空值)<br>返回 null
+客户端->>客户端: redis是null，实现缓存重建 try catch finally
+客户端->>Redis: 获取互斥锁<br>setnx key <br>stringRedisTemplate.opsForValue().setIfAbsent()
+客户端->>客户端: 获取锁失败，休眠并重试<br>Thread.sleep(50)
+客户端->>数据库: 获取锁成功，查数据库
+客户端->>Redis: 存在，存redis
+客户端->>客户端: 返回 shop
+客户端->>Redis: 不存在，存redis 写入空值避免访问数据库
+客户端->>客户端: 返回 null
+客户端->>Redis: finally 释放锁
+客户端->>前端: 这边包成方法统一由上面返回信息<br>null 返回 Result.fail("店铺不存在")<br>有值则返回 Result.ok(shop)
+```
 
 ```java 
 package com.hmdp.service.impl;
@@ -771,6 +848,30 @@ class HmDianPingApplicationTests {
 
 
 ## 逻辑过期解决缓存击穿
+
+
+```mermaid
+sequenceDiagram
+    participant 前端
+    participant 客户端
+    participant Redis
+    participant 数据库
+
+客户端->>客户端: 封装店铺信息 + 逻辑过期时间 <br>redisData.setData(shop) <br> redisData.setExpireTime() 替代redis TTL
+前端->>客户端: 提交商铺id <br>/api/shop/{id}
+客户端->>Redis: 从redis 查商铺缓存
+客户端->>Redis: 不存在，返回 null
+客户端->>客户端: redis命中，json反序列化
+客户端->>客户端: 解析RedisData 获取逻辑过期时间
+客户端->>客户端: 未过期，返回 shop
+客户端->>Redis: 过期，尝试获取互斥锁<br>setnx key <br>stringRedisTemplate.opsForValue().setIfAbsent()
+客户端->>客户端: 获取锁失败，返回 shop
+客户端->>客户端: 获取锁成功，开启独立线程后返回 shop
+客户端->>数据库: 独立线程中根据id查询数据库
+客户端->>Redis: 存redis
+客户端->>Redis: finally 释放锁
+客户端->>前端: 这边包成方法统一由上面返回信息<br>null 返回 Result.fail("店铺不存在")<br>有值则返回 Result.ok(shop)
+```
 
 ```java 
 package com.hmdp.service.impl;
@@ -1304,154 +1405,3 @@ class HmDianPingApplicationTests {
 4. JMeter 压测设定1秒100次
 5. 访问第一次时 console 应该可以看到数据库查询语句的log 查完会将数据存到缓存，看下redis 是否更新
 6. 查看JMeter 取样结果的响应数据 应该在隔一秒会看到数据改变
-
-# 总结
-
-
-## 添加商户缓存 
-
-```mermaid
-sequenceDiagram
-    participant 前端
-    participant 客户端
-    participant Redis
-    participant 数据库
-
-	前端->>客户端: /api/shop/{id}
-	客户端->>Redis: 查缓存
-	loop 判断该信息 redis 是否存在
-	  客户端->>前端: 存在，直接返回商户信息 Result.ok(shop)
-	  客户端->>数据库: 不存在，查数据库
-	end
-	loop 判断该信息 数据库 是否存在
-	  数据库->>客户端: 存在
-	  客户端->>Redis: 存redis
-	  客户端->>前端: 返回商户信息 Result.ok(shop)
-	  
-	  客户端->>前端: 不存在，返回错误信息 Result.fail("店铺不存在")
-	end
-```
-
-## 先修改数据库,再删除缓存
-```mermaid
-sequenceDiagram
-    participant 前端
-    participant 客户端
-    participant Redis
-    participant 数据库
-	
-  前端->>客户端: PUT /api/shop
-  客户端->>数据库: updateById()
-  客户端->>Redis: 砍redis，返回 Result.ok()
-  前端->>客户端: 查询时会访问 /api/shop/{id} 就会走上面的流程
-    
-```
-
-## 缓存穿透
-
-```mermaid
-sequenceDiagram
-    participant 前端
-    participant 客户端
-    participant Redis
-    participant 数据库
-	
-	
-	前端->>客户端: /api/shop/{id}
-	客户端->>Redis: 查缓存
-	loop 判断该信息 redis 是否存在
-	  客户端->>前端: 存在，直接返回商户信息
-	  客户端->>Redis: 不存在，查缓存是否空值
-	end
-	loop 判断该信息 redis 是否为null
-	  客户端->>数据库: 	是null，查数据库
-		客户端->>前端: 	不是null(那94空值)<br>返回错误信息 Result.fail("店铺信息不存在")
-	end
-	loop 判断该信息 数据库 是否存在
-	  客户端->>数据库: 存在
-	  客户端->>Redis: 存redis
-	  客户端->>前端: 返回商户信息 Result.ok(shop)
-	  
-	  客户端->>数据库: 不存在
-	  客户端->>Redis: 存redis 写入空值避免访问数据库
-	  客户端->>前端: 返回错误信息 Result.fail("店铺不存在")
-	end
-    
-```
-## 缓存击穿
-
-### 互斥锁
-
-```mermaid
-sequenceDiagram
-    participant 前端
-    participant 客户端
-    participant Redis
-    participant 数据库
-	
-	前端->>客户端: /api/shop/{id}
-	客户端->>Redis: 查缓存
-	loop 判断该信息 redis 是否存在
-	  客户端->>前端: 存在，返回商户信息 shop
-	  客户端->>Redis: 不存在，查缓存是否空值
-	end
-	loop 判断该信息 redis 是否为null
-	  客户端->>客户端: 	是null，实现缓存重建
-	  客户端->>客户端: 	不是null(那94空值)，返回 null 
-	end
-	loop 缓存重建 try catch finally
-		客户端->>Redis: 获取互斥锁
-		loop 判断是否获取锁成功
-			客户端->>数据库: 获取锁成功，查数据库
-			客户端->>客户端: 获取锁失败，休眠并重试	
-		end 
-		loop 判断该信息 数据库 是否存在
-		  客户端->>数据库: 存在
-		  客户端->>Redis: 存redis
-		  客户端->>前端: 返回商户信息 shop
-		  
-		  客户端->>数据库: 不存在
-		  客户端->>Redis: 存redis 写入空值避免访问数据库
-		  客户端->>客户端: 返回 null
-		end
-		客户端->>Redis: finally 释放锁
-	end 
-	客户端->>客户端: 这边包成方法统一由上面返回信息<br>null return Result.fail("店铺不存在")<br>有值则返回 Result.ok(shop)
-		
-```
-
-### 逻辑过期
-```mermaid
-sequenceDiagram
-    participant 前端
-    participant 客户端
-    participant Redis
-    participant 数据库
-	
-	客户端->>客户端: 封装店铺信息 + 逻辑过期时间 redisData.setData(shop) <br> redisData.setExpireTime() 替代redis TTL
-	前端->>客户端: /api/shop/{id}
-	客户端->>Redis: 查缓存
-	loop 判断该信息 redis 是否存在
-	  客户端->>前端: 存在，返回商户信息 shop
-	  客户端->>Redis: 不存在，查缓存是否空值
-	end
-	loop 判断该信息 redis 是否为null
-	  客户端->>客户端: 	是null，解析RedisData 获取逻辑过期时间
-	  客户端->>客户端: 	不是null(那94空值)，返回 null 
-	end
-	loop 判端是否过期
-		客户端->>客户端: 未过期，返回店铺信息 shop
-		客户端->>客户端: 过期，缓存重建
-	end
-	客户端->>Redis: 获取互斥锁
-	loop 判断是否获取锁成功
-		客户端->>客户端: 获取锁成功，开启新线程 缓存重建
-		客户端->>客户端: 获取锁失败，返回过期的店铺信息 shop	
-	end 
-	loop 新线程 
-	  客户端->>数据库: 查询店铺信息
-	  客户端->>客户端: 封装店铺信息 + 逻辑过期时间
-	  客户端->>Redis: 封装后的值tojson，存redis
-      客户端->>Redis: finally 释放锁
-	end
-```
