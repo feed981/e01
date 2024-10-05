@@ -1,11 +1,24 @@
-# 发送短信验证码
+# 基于session实现短信登录的流程
+## 发送短信验证码
 
+```mermaid
+sequenceDiagram
+    participant 前端
+    participant 客户端
+
+    前端->>客户端: Post /user/code <br>@RequestParam("phone")<br>提交手机号 
+    客户端->>客户端: 效验手机号(手机格式)
+客户端->>前端: 手机号格式错误<br>返回错误信息<br>请用户重新提交手机号
+客户端->>客户端: 生成验证码  <br>RandomUtil.randomNumbers(6)<br>保存验证码到session
+客户端->>前端: 发送验证码(这边是印在console) 
+```
 
 1. 提交手机号到controller
 POST http://localhost:8080/api/user/code?phone=0912345678
 2. serviceImpl 效验、生成、保存验证码到session
-3. 发送验证码  2024-09-11 14:52:05.380 DEBUG 27896 --- [nio-8081-exec-1] com.hmdp.service.impl.UserServiceImpl    : 发送短信验证码成功 ,验证码:193031
-
+3. console   2024-09-11 14:52:05.380 DEBUG 27896 --- [nio-8081-exec-1] com.hmdp.service.impl.UserServiceImpl    : 发送短信验证码成功 ,验证码:193031
+4. 或是redis key: login:code:手机号
+   
 controller
 ```java
 @Slf4j
@@ -99,7 +112,27 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements IU
         // 返回ok
         return null;
     }
+```
 
+## 短信验证码登陆、注册
+
+```mermaid
+sequenceDiagram
+    participant 前端
+    participant 客户端
+    participant 数据库
+
+      前端->>客户端: POST /user/login<br>@RequestBody LoginFormDTO <br>提交手机号、验证码
+	客户端->>前端: 手机号格式错误<br>返回错误信息<br>请用户重新提交手机号
+	客户端->>客户端: 从session取验证码
+	客户端->>前端: 验证码错误<br>返回错误信息<br>需要重新发送短信验证码
+        客户端->>数据库: 根据手机号查询用户<br>query().eq("phone" ,phone).one()
+        客户端->>客户端: 存在，保存用户信息到session<br>session.setAttribute("user" ,user)
+        客户端->>数据库: 不存在，创建新用户并保存<br>save(user)
+        客户端->>前端: Result.ok()
+```
+
+```java
     @Override
     public Result login(LoginFormDTO loginForm, HttpSession session) {
         // 效验手机号
@@ -143,7 +176,21 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements IU
 
 ```
 
-# 效验登陆状态 短信验证码登陆、注册
+## 效验登陆状态
+
+```mermaid
+sequenceDiagram
+    participant 前端
+    participant 拦截器
+    participant ThreadLocal
+
+      前端->>拦截器: 获取 session<br>获取session 中的用户<br>判断用户是否存在
+拦截器->>前端: 不存在，拦截，返回401
+      拦截器->>ThreadLocal: 存在，保存用户信息到 ThreadLocal<br>UserHolder.saveUser((UserDTO) user)
+      拦截器->>前端: 放行
+拦截器->>拦截器: 用户业务执行完毕，销毁用户信息避免内存泄漏<br>移除用户<br>UserHolder.removeUser();
+```
+
 
 4. login.html POST http://localhost:8080/api/user/login {"phone": "0912345678","code": "636561"}
 5. 从seesion获取用户、判断用户是否存在
@@ -339,8 +386,111 @@ axios.post("/user/login", this.form)
 
 # Redis代替session的业务流程
 
+## 短信验证
 
 
+```mermaid
+sequenceDiagram
+    participant 前端
+    participant 客户端
+    participant Redis
+
+前端->>客户端: Post /user/code <br>@RequestParam("phone")<br>提交手机号 
+客户端->>客户端: 效验手机号(手机格式)
+客户端->>前端: 手机号格式错误<br>返回错误信息<br>请用户重新提交手机号
+客户端->>客户端: 生成验证码  <br>RandomUtil.randomNumbers(6)
+客户端->>Redis: 保存验证码到redis set key vale ex 120
+客户端->>前端: 发送验证码(这边是印在console) 
+```
+
+```java 
+package com.hmdp.service.impl;
+
+import cn.hutool.core.bean.BeanUtil;
+import cn.hutool.core.bean.copier.CopyOptions;
+import cn.hutool.core.util.RandomUtil;
+import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
+import com.hmdp.dto.LoginFormDTO;
+import com.hmdp.dto.Result;
+import com.hmdp.dto.UserDTO;
+import com.hmdp.entity.User;
+import com.hmdp.mapper.UserMapper;
+import com.hmdp.service.IUserService;
+import com.hmdp.utils.RegexUtils;
+import com.hmdp.utils.BeanUtils;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.stereotype.Service;
+
+import javax.annotation.Resource;
+import javax.servlet.http.HttpSession;
+import java.lang.reflect.InvocationTargetException;
+import java.util.*;
+import java.util.concurrent.TimeUnit;
+import java.util.stream.IntStream;
+
+import static com.hmdp.utils.RedisConstants.*;
+import static com.hmdp.utils.SystemConstants.USER_NICK_NAME_PREFIX;
+
+import java.io.BufferedWriter;
+import java.io.FileWriter;
+import java.io.IOException;
+import java.util.ArrayList;
+import java.util.List;
+
+/**
+ * <p>
+ * 服务实现类
+ * </p>
+ *
+ * @author 虎哥
+ * @since 2021-12-22
+ */
+@Slf4j
+@Service
+public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements IUserService {
+
+    @Resource
+    private StringRedisTemplate stringRedisTemplate;
+
+    @Override
+    public Result sendCode(String phone) {
+        // 效验手机号
+        if(RegexUtils.isPhoneInvalid(phone)){
+            // 如果不符合，返回错误信息
+            return Result.fail("手机号格式错误!");
+        }
+
+        // 如果符合，生成验证码
+        String code = RandomUtil.randomNumbers(6);
+
+        // 保存验证码到redis set key vale ex 120
+        stringRedisTemplate.opsForValue().set(LOGIN_CODE_KEY + phone, code ,LOGIN_CODE_TTL , TimeUnit.MINUTES);
+
+        // 发送验证码
+        log.debug("发送短信验证码成功 ,验证码:{}" ,code);
+        // 返回ok
+        return null;
+    }
+```
+## 短信验证码登陆、注册
+
+```mermaid
+sequenceDiagram
+    participant 前端
+    participant 客户端
+    participant 数据库
+    participant Redis
+
+      前端->>客户端: POST /user/login<br>@RequestBody LoginFormDTO <br>提交手机号、验证码
+	客户端->>前端: 手机号格式错误<br>返回错误信息<br>请用户重新提交手机号
+	客户端->>Redis: 从redis 获取验证码并效验
+	客户端->>前端: 验证码错误<br>返回错误信息<br>需要重新发送短信验证码
+        客户端->>数据库: 根据手机号查询用户<br>query().eq("phone" ,phone).one()
+        客户端->>Redis: 存在，生成 token 作为登陆令牌<br>保存用户信息到redis
+        客户端->>数据库: 不存在，创建新用户并保存<br>save(user)
+        客户端->>前端: Result.ok()
+```
 
 service
 
@@ -360,7 +510,7 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements IU
     @Resource
     private StringRedisTemplate stringRedisTemplate; 
 @Override
-    public Result login_redis(LoginFormDTO loginForm, HttpSession session) {
+    public Result login_redis(LoginFormDTO loginForm) {
         // 效验手机号
         String phone = loginForm.getPhone();
         if(RegexUtils.isPhoneInvalid(phone)){
@@ -402,12 +552,12 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements IU
     }
 }
 ```
-
 拦截器
 
 8. 基于token 获取redis中的用户
 9. 存在，保存用户信息到 ThreadLocal
 10. 更新 token 存活时间
+    
 ```java 
 @Slf4j
 public class LoginInterceptor implements HandlerInterceptor {
@@ -494,6 +644,25 @@ public class MvcConfig implements WebMvcConfigurer {
 由于原本的拦截器是拦截有需要登入的路径，会导致部份访问有需要登入的路径时才会刷新token存活时间
 
 所以这边优化拦截器就是需要增加一个拦截所有路径的拦截器，让即使登入后从头到尾都没访问到需要登入的路径的用户也可以不断刷新token存活时间
+
+```mermaid
+sequenceDiagram
+    participant 前端
+    participant 拦截器
+    participant ThreadLocal
+    participant Redis
+
+    note right of 拦截器: 这边有两个拦截器在implements WebMvcConfigurer设置<br> 1是有挡登陆后的请求 2是所有请求
+      前端->>拦截器: 获取请求头中的token，这边是设置了axios interceptor <br>所以才能 request.getHeader("authorization");
+      拦截器->>拦截器: 基于token 获取redis中的用户<br>stringRedisTemplate.opsForHash().entries(tokenKey)
+      
+拦截器->>前端: 不存在，返回true <br>属于不需要登陆的请求
+拦截器->>ThreadLocal: 存在，保存用户信息到 ThreadLocal<br>UserHolder.saveUser((UserDTO) user)
+拦截器->>Redis: 更新 token 存活时间
+拦截器->>前端: 放行
+拦截器->>拦截器: 用户业务执行完毕，销毁用户信息避免内存泄漏<br>移除用户<br>UserHolder.removeUser();
+```
+
 
 
 拦截器1
@@ -652,70 +821,4 @@ public class MvcConfig implements WebMvcConfigurer {
                 ).order(1);
     }
 }
-```
-
-# 总结
-
-## 发送短信验证码
-```mermaid
-sequenceDiagram
-    participant 前端
-    participant 拦截器
-    participant ThreadLocal
-    participant 客户端
-    participant 数据库
-    participant Redis
-
-    前端->>客户端: 提交手机号
-    客户端->>客户端: 效验手机号(手机格式)
-    loop 手机号格式错误
-      客户端->>前端: 返回错误信息: <br>手机号格式错误!，请用户重新提交手机号
-    end
-    loop 手机号格式正确
-      客户端->>客户端: 生成验证码  <br>RandomUtil.randomNumbers(6)
-      客户端->>Redis: 保存验证码到redis <br>set key vale ex 120
-      客户端->>前端: 发送验证码(这边是印在console) 
-    end  
-```
-
-## 短信验证码登陆/注册
-
-```mermaid
-sequenceDiagram
-    participant 前端
-    participant 拦截器
-    participant ThreadLocal
-    participant 客户端
-    participant 数据库
-    participant Redis
-
-      前端->>客户端: 提交手机号、验证码
-      loop 格式错误
-        客户端->>前端: 返回错误信息: <br>手机号格式错误!，请用户重新提交手机号
-      客户端->>前端: 返回错误信息: <br>验证码错误!，回到步驟1 发送短信验证码
-      end
-      loop 根据手机号查询用户
-        客户端->>数据库: 存在，随机生成 token 作为登陆令牌 <br>UUID.randomUUID().toString()
-        客户端->>数据库: 不存在，创建新用户并保存
-        客户端->>Redis: 将数据库查询到用户资讯转DTO后 <br>key: token value: dto + TTL
-      end
-```
-
-## 效验登陆状态 (implements HandlerInterceptor 登入的拦截器)
-
-```mermaid
-sequenceDiagram
-    participant 前端
-    participant 拦截器
-    participant ThreadLocal
-    participant 客户端
-    participant 数据库
-    participant Redis
-
-    note right of 拦截器: 这边有两个拦截器在implements WebMvcConfigurer设置<br> 1是有挡登陆后的请求 2是所有请求
-      前端->>拦截器: 获取请求头中的token，这边是设置了axios interceptor <br>所以才能 request.getHeader("authorization");
-      拦截器->>拦截器: 基于token 获取redis中的用户
-      拦截器->>ThreadLocal: 存在，保存用户信息
-      拦截器->>Redis: 更新 token 存活时间 <br>( 这属于拦截器2所有请求 <br>避免不需要登陆的请求会没刷新 token存活时间)
-      拦截器->>ThreadLocal: 移除用户<br>afterCompletion() <br>用户业务执行完毕，<br>销毁用户信息避免内存泄漏
 ```
