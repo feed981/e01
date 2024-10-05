@@ -1,6 +1,22 @@
 # 添加商户缓存
 
 ```mermaid
+flowchart LR
+    A[开始] --> B[提交商铺id]
+    B --> C[从Redis查询商铺缓存]
+    C --> D{判断缓存是否命中}
+    
+    D -->|命中| K[返回商铺信息]
+    D -->|未命中| F[根据id查询数据库]
+    F --> H{判断商铺是否存在}
+    H -->|存在| I[将商铺数据写入Redis]
+    H -->|不存在| J[返回错误信息]
+    I --> K[返回商铺信息]
+	J --> N[结束]
+    K --> N[结束]
+```
+
+```mermaid
 sequenceDiagram
     participant 前端
     participant 客户端
@@ -219,6 +235,17 @@ public class ShopTypeServiceImpl extends ServiceImpl<ShopTypeMapper, ShopType> i
 # 实现商铺缓存与数据库的双写一致
 
 ```mermaid
+flowchart LR
+    A[开始] --> B[修改商铺信息]
+    B --> D{通过id查商户信息}
+    D -->|存在| E[根据id更新数据]
+    D -->|不存在| F[返回错误信息]
+    E --> G[删除Redis]
+F --> N[结束]
+    G --> N[结束]
+```
+
+```mermaid
 sequenceDiagram
     participant 前端
     participant 客户端
@@ -360,6 +387,26 @@ select * from tb_shop ts ;
 
 ## 编码解决商铺查询的缓存穿透问题
 
+```mermaid
+flowchart LR
+    A[开始] --> B[提交商铺id]
+    B --> C[从Redis查询商铺缓存]
+    C --> D{判断缓存是否命中}
+    
+    D -->|未命中| F[根据id查询数据库]
+    D -->|命中| E{判断是否为空值}
+
+    E --> |是| N[结束]
+    E --> |否| K[返回商铺信息]
+
+    F --> H{判断商铺是否存在}
+    H -->|存在| I[将商铺数据写入Redis]
+    H -->|不存在| J[将空值写入Redis]
+    I --> K
+
+    J --> N
+    K --> N
+```
 
 ```mermaid
 sequenceDiagram
@@ -551,6 +598,27 @@ OK
 ```
 
 ## 加上互斥锁
+
+```mermaid
+flowchart LR
+    A[开始] --> B[提交商铺id]
+    B --> C[从Redis查询商铺缓存]
+    C --> D{判断缓存是否命中}
+    
+    D -->|命中| E[返回商铺信息]
+    D -->|未命中| F[尝试获取互斥锁]
+    
+    F --> H{判断是否获取锁}
+    H -->|是| I[根据id查询数据库]
+    H -->|否| J[休眠一段时间]
+    J --> C
+
+    I --> L[将商铺数据写入Redis，并设置过期时间]
+    L --> M[释放互斥锁]
+    
+    M --> E
+    E --> N[结束]
+```
 
 ```mermaid
 sequenceDiagram
@@ -849,6 +917,29 @@ class HmDianPingApplicationTests {
 
 ## 逻辑过期解决缓存击穿
 
+```mermaid
+flowchart LR
+    A[开始] --> B[提交商铺id]
+    B --> C[从Redis查询商铺缓存]
+    C --> D{判断缓存是否命中}
+    
+    D -->|命中| F{判断逻辑过期时间是否过期}
+    D -->|未命中| E[返回空]
+
+    F -->|过期| G[尝试获取互斥锁]
+    F -->|未过期| P[返回商铺信息]
+    
+    G --> H{判断是否获取锁}
+    H -->|是| I[开启独立线程]
+    H -->|否| P
+    I --> P
+    I -.-> K[根据id查询数据库]
+    K --> L[将商铺数据写入Redis，并设置逻辑过期时间]
+    L --> M[释放互斥锁]
+    
+    E --> N[结束]
+    P --> N[结束]
+```
 
 ```mermaid
 sequenceDiagram
@@ -866,7 +957,7 @@ sequenceDiagram
 客户端->>客户端: 未过期，返回 shop
 客户端->>Redis: 过期，尝试获取互斥锁<br>setnx key <br>stringRedisTemplate.opsForValue().setIfAbsent()
 客户端->>客户端: 获取锁失败，返回 shop
-客户端->>客户端: 获取锁成功，开启独立线程后返回 shop
+客户端->>客户端: 获取锁成功，开启独立线程后(先返回舊商铺信息 shop)
 客户端->>数据库: 独立线程中根据id查询数据库
 客户端->>Redis: 存redis
 客户端->>Redis: finally 释放锁
