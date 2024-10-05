@@ -4,7 +4,6 @@ import com.feed01.utils.LoginInterceptor;
 import com.feed01.utils.RefreshTokenInterceptor;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.data.redis.core.StringRedisTemplate;
-import org.springframework.web.servlet.config.annotation.CorsRegistry;
 import org.springframework.web.servlet.config.annotation.InterceptorRegistry;
 import org.springframework.web.servlet.config.annotation.WebMvcConfigurer;
 
@@ -31,6 +30,7 @@ public class MvcConfig implements WebMvcConfigurer {
                         "/upload/**", //上传通常是登入才能，但目前测试需要先放行
                         "/user/code",
                         "/user/login"
+                        ,"/user/login-createTestuser" // 个人api 新增用户压测用
                 ).order(1);
     }
 }

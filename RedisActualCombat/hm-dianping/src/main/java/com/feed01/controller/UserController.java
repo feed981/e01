@@ -63,4 +63,10 @@ public class UserController {
         log.info("/me user={}",user);
         return Result.ok(user);
     }
+
+    @GetMapping("/login-createTestuser")
+    public Result loginCreateTestuser(){
+        return userService.loginCreateTestuser();
+    }
+
 }

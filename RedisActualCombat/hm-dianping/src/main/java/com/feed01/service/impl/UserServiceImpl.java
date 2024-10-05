@@ -19,12 +19,19 @@ import org.springframework.stereotype.Service;
 import javax.annotation.Resource;
 import javax.servlet.http.HttpSession;
 
-import java.util.HashMap;
-import java.util.Map;
-import java.util.UUID;
+import java.io.BufferedWriter;
+import java.io.FileWriter;
+import java.io.IOException;
+import java.util.*;
 import java.util.concurrent.TimeUnit;
+import java.util.stream.IntStream;
 
+import static com.feed01.utils.RedisConstants.LOGIN_USER_KEY;
 import static com.feed01.utils.SystemConstants.USER_NICK_NAME_PREFIX;
+
+import java.io.*;
+import java.nio.file.Files;
+import java.nio.file.Paths;
 
 /**
  * <p>
@@ -99,13 +106,14 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements IU
                 CopyOptions.create()
                         .setIgnoreNullValue(true)
                         .setFieldValueEditor((fieldName ,fieldValue) -> fieldValue.toString()));
-        String tokenKey = RedisConstants.LOGIN_USER_KEY + token;
+        String tokenKey = LOGIN_USER_KEY + token;
         // 存储 目前会是 从登入到30分钟会被踢出，但应该是 用户30分钟内不断访问就应该刷新存活时间
         stringRedisTemplate.opsForHash().putAll(tokenKey ,userMap);
         stringRedisTemplate.expire(tokenKey ,RedisConstants.CACHE_SHOP_TTL ,TimeUnit.MINUTES);
         // 返回 token
         return Result.ok(token);
     }
+
 
     @Override
     public Result login_session(LoginFormDTO loginForm, HttpSession session) {
@@ -148,5 +156,67 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements IU
 //        User user2 = query().eq("phone" ,phone).one();
 //        log.info("user2={}",user2);
         return user;
+    }
+    @Override
+    public Result loginCreateTestuser() {
+        int howManyTestUser = 10;
+        String filePath = "D:\\workspace\\write\\tokens.txt";
+        List<String> list = new ArrayList<>();
+        IntStream.rangeClosed(0, howManyTestUser).forEach(i -> {
+            createTestuser(RandomUtil.randomNumbers(8) ,list);
+        });
+        tokenJMeterTest(filePath ,list);
+        return Result.ok("done");
+    }
+
+    private void tokenJMeterTest(String txtFile ,List<String> list){
+        try {
+            // 检查并创建必要的目录
+            File file = new File(txtFile);
+            File parentDir = file.getParentFile();
+            if (parentDir != null && !parentDir.exists()) {
+                parentDir.mkdirs(); // 创建目录
+            }
+            try (BufferedWriter writer = new BufferedWriter(new FileWriter(txtFile))) {
+                // 写入数据记录
+                list.forEach(e -> {
+                    try {
+                        writer.write(e); // 写入每个元素
+                        writer.newLine(); // 添加换行符
+                    } catch (IOException ioException) {
+                        log.error("写入时出错: {}", ioException.getMessage());
+                    }
+                });
+                log.info("数据已成功写入文件。");
+            }
+        } catch (Exception e) {
+            log.error("文件操作时出错: {}" , e.getMessage());
+        }
+    }
+
+    private void createTestuser(String phone ,List<String> list){
+        // 一致， 根据手机号查询用户
+        User user = query().eq("phone", phone).one();
+        // 判断用户是否存在
+        if (user == null) {
+            // 不存在，创建新用户并保存
+            user = createUserWithPhone(phone);
+        }
+        // 保存用户信息到redis
+        // 随机生成 token 作为登陆令牌
+        String token = UUID.randomUUID().toString();
+        list.add(token);
+        // 将 user 对象转为 Hash
+        UserDTO userDTO = BeanUtil.copyProperties(user, UserDTO.class);
+        // Long to String
+        //        Map<String ,Object> userMap = BeanUtil.beanToMap(userDTO);
+        Map<String, Object> userMap = BeanUtil.beanToMap(userDTO, new HashMap<>(),
+                CopyOptions.create()
+                        .setIgnoreNullValue(true)
+                        .setFieldValueEditor((fieldName, fieldValue) -> fieldValue.toString()));
+        String tokenKey = LOGIN_USER_KEY + token;
+        // 存储 目前会是 从登入到30分钟会被踢出，但应该是 用户30分钟内不断访问就应该刷新存活时间
+        stringRedisTemplate.opsForHash().putAll(tokenKey, userMap);
+        stringRedisTemplate.expire(tokenKey, 30, TimeUnit.DAYS);
     }
 }
