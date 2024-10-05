@@ -202,8 +202,8 @@ class RedisDemoApplicationTests {
 
 为了在反序列化时知道对象的类型,JSON序列化器会将类的class类型写入json结果中,存入Redis,会带来额外的内存开销。
 
+查看redis key: user:1
 ```json
-// 查看redis key: user:1
 
 {
     "@class": "com.feed01.pojo.User",
