@@ -2,6 +2,17 @@
 ## 发送短信验证码
 
 ```mermaid
+flowchart LR
+    A[开始] --> B[提交手机号]
+    B --> C{校验手机号}
+    C -->|符合| D[生成验证码]
+    D --> E[保存验证码到session]
+    E --> F[发送验证码]
+    F --> G[结束]
+    C -->|不符合| B
+```
+
+```mermaid
 sequenceDiagram
     participant 前端
     participant 客户端
@@ -117,6 +128,21 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements IU
 ## 短信验证码登陆、注册
 
 ```mermaid
+flowchart LR
+    A[开始] --> B[提交手机号和验证码]
+    B --> C{校验验证码}
+    C -->|一致| D[根据手机号查询用户]
+    C -->|不一致| B
+    D --> E{用户是否存在}
+    E -->|存在| F[保存用户到session]
+
+    E -->|不存在| H[创建新用户]
+    H --> I[保存用户到数据库]
+    I --> F
+    F --> G[结束]
+```
+
+```mermaid
 sequenceDiagram
     participant 前端
     participant 客户端
@@ -177,6 +203,18 @@ sequenceDiagram
 ```
 
 ## 效验登陆状态
+
+```mermaid
+flowchart LR
+    A[开始] --> B[请求并携带cookie]
+    B --> C[从session获取用户]
+    C --> D{判断用户是否存在}
+    D -->|有| E[保存用户到ThreadLocal]
+    E --> F[放行]
+    D -->|没有| G[拦截]
+    F --> H[结束]
+    G --> H[结束]
+```
 
 ```mermaid
 sequenceDiagram
@@ -388,6 +426,17 @@ axios.post("/user/login", this.form)
 
 ## 短信验证
 
+```mermaid
+flowchart LR
+    A[开始] --> B[提交手机号]
+    B --> C{校验手机号}
+    C -->|符合| D[生成验证码]
+    D --> E[保存验证码到Redis]
+    E --> F[发送验证码]
+    F --> G[结束]
+
+    C -->|不符合| B
+```
 
 ```mermaid
 sequenceDiagram
@@ -474,6 +523,21 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements IU
     }
 ```
 ## 短信验证码登陆、注册
+
+```mermaid
+flowchart LR
+    A[开始] --> B[提交手机号和验证码]
+    B --> C{校验验证码}
+    C -->|一致| D[根据手机号查询用户]
+    C -->|不一致| B
+    D --> E{用户是否存在}
+    E -->|存在| F[保存用户到Redis]
+
+    E -->|不存在| H[创建新用户]
+    H --> I[保存用户到数据库]
+    I --> F
+    F --> G[结束]
+```
 
 ```mermaid
 sequenceDiagram
@@ -645,6 +709,19 @@ public class MvcConfig implements WebMvcConfigurer {
 由于原本的拦截器是拦截有需要登入的路径，会导致部份访问有需要登入的路径时才会刷新token存活时间
 
 所以这边优化拦截器就是需要增加一个拦截所有路径的拦截器，让即使登入后从头到尾都没访问到需要登入的路径的用户也可以不断刷新token存活时间
+
+
+```mermaid
+flowchart LR
+    A[开始] --> B[请求并携带token]
+    B --> C[从token获取用户]
+    C --> D{判断用户是否存在}
+    D -->|有| E[保存用户到ThreadLocal]
+    E --> I[更新Redis token存活时间]
+    I --> F[放行]
+    D -->|没有| F
+    F --> H[结束]
+```
 
 ```mermaid
 sequenceDiagram
