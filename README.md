@@ -43,7 +43,6 @@ ID的组成部分:
 - 序列号: 32bit,秒内的计数器,支持每秒产生2^32个不同ID
 
 
-
 ```java 
 package com.hmdp.utils;
 
@@ -57,7 +56,7 @@ import java.time.format.DateTimeFormatter;
 @Component
 public class RedisIdWorker {
 
-    private static final long BEGIN_TIMESTAMP = 1704067200L;
+    private static final long BEGIN_TIMESTAMP = 1704067200L; // 设置开始时间
     // 序列号的位数
     private static final int COUNT_BITS = 32;
 
@@ -287,7 +286,8 @@ POST /api/voucher-order/seckill/{id} 优惠券id，返回值: 订单id
 ```mermaid 
 flowchart LR
     A[开始] --> B[提交优惠券id]
-    B --> C{是否开始秒杀}
+    B --> K[查询优惠券信息]
+    K --> C{是否开始秒杀}
     C -->|是| D{检查库存}
     C -->|否| E[返回尚未开始/已结束]
 
@@ -302,6 +302,31 @@ flowchart LR
     H --> I[返回订单号]
     
     I --> J[结束]
+```
+
+```mermaid
+sequenceDiagram
+    participant postman
+    participant 前端
+    participant 客户端
+    participant Redis
+    participant 数据库
+
+    postman->>客户端: 添加优惠券 <br>/voucher/seckill
+	前端->>客户端: 下单: 提交优惠券id <br>/voucher-order/seckill/{id}
+	客户端->>数据库: 查询秒杀优惠券<br>getById(voucherId)
+	  客户端->>客户端: 判断秒杀是否开始
+	  客户端->>前端: 返回错误信息 Result.fail("秒杀优惠券尚未开始")
+        客户端->>客户端: 判断秒杀是否结束
+        客户端->>前端: 返回错误信息 Result.fail("秒杀优惠券已结束")
+客户端->>客户端: 判断库存是否充足 stock < 1
+客户端->>前端: 返回错误信息 Result.fail("库存不足")
+客户端->>数据库: 扣减库存
+数据库->>客户端: update 返回false
+客户端->>前端: 返回错误信息 Result.fail("库存不足")
+客户端->>客户端: 产生订单号: 时间戳<<32|redis icr:order:yyyy:MM:dd
+客户端->>数据库: 创建订单
+客户端->>前端: 返回订单号 Result.ok(orderId)
 ```
 
 业务
@@ -332,7 +357,7 @@ import java.time.LocalDateTime;
  * @since 2021-12-22
  */
 @Service
-public class IVoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, VoucherOrder> implements IVoucherOrderService {
+public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, VoucherOrder> implements IVoucherOrderService {
 
     @Resource
     private ISeckillVoucherService iSeckillVoucherService;
@@ -352,7 +377,7 @@ public class IVoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vo
             return Result.fail("秒杀优惠券尚未开始");
         }
 
-        // 3.判断秒杀是否已经结束
+        // 3.判断秒杀是否结束
         if(seckillVoucher.getEndTime().isBefore(LocalDateTime.now())){
             return Result.fail("秒杀优惠券已结束");
         }
@@ -390,25 +415,17 @@ public class IVoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vo
 
 ```
 
-## 秒杀时JMeter 全部返回401
+## 秒杀时JMeter 全部返回 权限不足—401
 
-http localhost 8081 
-
-POST /voucher-order/seckill/12
-
-出现401大概率是“短信登录”部分，由于设置了用户登录有效期，有效期一过，redis中无法查询到用户对应的token，然后返回“权限不足—401”的响应码，就在那个RefreshTokenInterceptor拦截器里设置的。
-
-解决方法可以将redis中存储的用户登录token的TTL设置为永久，或者在前端页面重新登录就行
-
-前端页面重新登录，将redis中存储的用户登录token的TTL设置为永久-1
-
-JMeter的部份需要加个请求头 Add/Config Element/Http Header Manager
-
-header authorization	6ed55897-5c45-4599-a548-659c32aba59d
+检查
+1. JMeter 请求头 /Config Element/Http Header Manager
+    - authorization   5252a55b-ba5b-4229-a781-d577059b2d7e
+2. redis login:token:5252a55b-ba5b-4229-a781-d577059b2d7e 你登入的是否超时
+    -  前端页面重新登录，将redis中存储的用户登录token的TTL设置为永久-1
 
 ## 超卖
 
-当用JMeter大量访问时就会造成超卖问题
+当用JMeter大量访问时就会造成超卖问题(一人多单)
 
 ## 乐观锁解决超卖
 
@@ -458,6 +475,18 @@ if(count > 0){
  
 1. synchronized 写在方法内部
 
+写在方法内部
+
+先释放锁才会提交事务
+
+函数结束由spring提交
+
+锁释放代表其他线程可以进到锁了
+
+那可能造成事务尚未提交，订单还没写入数据库
+
+所以应该是事务提交之后再去上锁
+            
 ```java
 @Slf4j
 @Service
@@ -475,14 +504,6 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
     public Result createVoucherOrder(Long voucherId){
         Long userId = UserHolder.getUser().getId();
 
-        /**
-            写在方法内部
-            先释放锁才会提交事务
-            函数结束由spring提交
-            锁释放代表其他线程可以进到锁了
-            那可能造成事务尚未提交，订单还没写入数据库
-            所以应该是事务提交之后再去上锁
-        */
         synchronized (userId.toString().intern()) { // 这个 intern() 是为了判断线程id ，只用toString() 的话会每次都new 一个新的，就无法判断
             // 4.查询订单
             // 5.扣减库存
@@ -494,7 +515,7 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
 }
 ```
 
-2. 
+2. 事务失效 return this.createVoucherOrder(voucherId);
 
 ```java
 @Slf4j
@@ -525,6 +546,45 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
 ```
 
 2.2. 
+
+```mermaid
+flowchart LR
+    A[开始] --> B[提交优惠券id]
+    B --> C[查询优惠券信息 判断时间、库存]
+    C --> D[创建锁]
+    D --> E[判断线程id，避免一人多单- 单机情况]
+    E --> F[获取代理对象]
+    F --> G[调用代理对象接口]
+    G --> I[查询订单、扣减库存、创建订单、返回订单id]
+    I --> J[释放锁]
+    J --> K[结束]
+```
+
+
+```mermaid
+sequenceDiagram
+    participant 前端
+    participant 客户端
+    participant Redis
+    participant 数据库
+
+客户端->>客户端: 入口: 暴露代理对象 @EnableAspectJAutoProxy(exposeProxy = true)
+前端->>客户端: 下单: 提交优惠券id <br>/voucher-order/seckill/{id}
+客户端->>数据库: 查询秒杀优惠券<br>getById(voucherId)
+客户端->>客户端: 判断秒杀是否开始/结束、库存是否充足
+客户端->>前端: 返回错误信息 Result.fail("秒杀优惠券尚未开始")<br>Result.fail("秒杀优惠券已结束")<br>Result.fail("库存不足")
+客户端->>客户端: 创建锁 synchronized 
+客户端->>客户端: 获取线程id <br>toString()方法会new 一个String的物件<br>所以需要加上 .intern() 才能确保是同个线程id
+客户端->>客户端: 获取代理对象 <br>(原本是 this.createVoucherOrder() <br>这个方法有事务管理，用this 事务会失效)
+客户端->>客户端: 调用代理对象接口
+客户端->>数据库: 扣减库存
+数据库->>客户端: update 返回false
+客户端->>前端: 返回错误信息 Result.fail("库存不足")
+客户端->>客户端: 产生订单号: 时间戳<<32|redis icr:order:yyyy:MM:dd
+客户端->>数据库: 创建订单
+客户端->>前端: 返回订单号 Result.ok(orderId)
+客户端->>客户端: 释放锁
+```
 
 ```java
 @Slf4j
@@ -776,7 +836,7 @@ import java.util.concurrent.locks.ReentrantLock;
  * @since 2021-12-22
  */
 @Service
-public class IVoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, VoucherOrder> implements IVoucherOrderService {
+public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, VoucherOrder> implements IVoucherOrderService {
 
     @Resource
     private ISeckillVoucherService seckillVoucherService;
@@ -839,59 +899,36 @@ public class IVoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vo
 - 如果一致则释放锁
 - 如果不一致则不释放锁
 
+具体代码如下：
+加锁
 ```java
-package com.hmdp.utils;
+private static final String ID_PREFIX = UUID.randomUUID().toString(true) + "-";
+@Override
+public boolean tryLock(long timeoutSec) {
+   // 获取线程标示
+   String threadId = ID_PREFIX + Thread.currentThread().getId();
+   // 获取锁
+   Boolean success = stringRedisTemplate.opsForValue()
+                .setIfAbsent(KEY_PREFIX + name, threadId, timeoutSec, TimeUnit.SECONDS);
+   return Boolean.TRUE.equals(success);
+}
+```
 
-import cn.hutool.core.lang.UUID;
-import org.springframework.core.io.ClassPathResource;
-import org.springframework.data.redis.core.StringRedisTemplate;
-import org.springframework.data.redis.core.script.DefaultRedisScript;
-
-import java.util.Collections;
-import java.util.concurrent.TimeUnit;
-
-public class SimpleRedisLock implements ILock {
-    private String name;// 业务
-    private StringRedisTemplate stringRedisTemplate;
-
-    public SimpleRedisLock(String name, StringRedisTemplate stringRedisTemplate) {
-        this.name = name;
-        this.stringRedisTemplate = stringRedisTemplate;
-    }
-
-    private static final String KEY_PREFIX = "lock:"; // 专业前缀
-    private static final String ID_PREFIX = UUID.randomUUID().toString(true) + "-";
-
-    private static final DefaultRedisScript<Long> UNLOCK_SCRIPT;
-
-    static {
-        UNLOCK_SCRIPT = new DefaultRedisScript<>();
-        UNLOCK_SCRIPT.setLocation(new ClassPathResource("unlock.lua"));
-        UNLOCK_SCRIPT.setResultType(Long.class);
-    }
-    @Override
-    public boolean tryLock(long timeoutSec) {
-        // 获取线程标示
-        String threadId = ID_PREFIX + Thread.currentThread().getId();//提供给锁监视器(setnx) 比对目前是线程几
-        // 获取锁
-        Boolean success = stringRedisTemplate.opsForValue().setIfAbsent(KEY_PREFIX + name, threadId, timeoutSec, TimeUnit.SECONDS);
-        return Boolean.TRUE.equals(success);
-    }
-
-    @Override
-    public void unlock() {
-        // 获取线程标示
-        String threadId = ID_PREFIX + Thread.currentThread().getId();
-        // 获取所中的标示
-        String id = stringRedisTemplate.opsForValue().get(KEY_PREFIX + name);
-        // 判断线程是否一致
-        if (threadId.equals(id)) {
-            //释放锁
-            stringRedisTemplate.delete(KEY_PREFIX + name);
-        }
+释放锁
+```java
+public void unlock() {
+    // 获取线程标示
+    String threadId = ID_PREFIX + Thread.currentThread().getId();
+    // 获取锁中的标示
+    String id = stringRedisTemplate.opsForValue().get(KEY_PREFIX + name);
+    // 判断标示是否一致
+    if(threadId.equals(id)) {
+        // 释放锁
+        stringRedisTemplate.delete(KEY_PREFIX + name);
     }
 }
 ```
+
 测试
 
 断点可以下在获取锁跟释放锁的位置
@@ -915,16 +952,16 @@ https://www.runoob.com/lua/lua-tutorial.html
 
 测试
 ```sql
-192.168.33.10:6379> EVAL "return redis.call('set','name','feed')" 0
+192.168.33.10:6379> EVAL "return redis.call('set','name','feed01')" 0
 OK
 192.168.33.10:6379> get name
-"feed"
+"feed01"
 
 -- 如果脚本中的key、value不想写死,可以作为参数传递。key类型参数会放入KEYS数组,其它参数会放入ARGV数组,在脚本中可以从KEYS和ARGV数组获取这些参数
-192.168.33.10:6379> EVAL "return redis.call('set',KEYS[1],ARGV[1])" 1 name feed2
+192.168.33.10:6379> EVAL "return redis.call('set',KEYS[1],ARGV[1])" 1 name feed02
 OK
 192.168.33.10:6379> get name
-"feed2"
+"feed02"
 ```
 
 ## 释放锁的业务流程
@@ -934,7 +971,7 @@ OK
 3. 如果一致则释放锁(删除)
 4. 如果不一致则什么都不做
 
-## Lua 脚本练习
+## Lua 脚本
 
 ```lua
 -- 锁的key
@@ -1177,7 +1214,7 @@ import java.util.concurrent.locks.ReentrantLock;
  * @since 2021-12-22
  */
 @Service
-public class IVoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, VoucherOrder> implements IVoucherOrderService {
+public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, VoucherOrder> implements IVoucherOrderService {
 
     @Resource
     private ISeckillVoucherService seckillVoucherService;
@@ -1295,6 +1332,12 @@ Redisson分布式锁原理:
 - 超时续约:利用watchDog,每隔一段时间(releaseTime/3),重置超时时间
 
 ## Redisson的multiLock原理
+
+为了提高redis的可用性，我们会搭建集群或者主从，现在以主从为例
+
+此时我们去写命令，写在主机上， 主机会将数据同步给从机，但是假设在主机还没有来得及把数据写入到从机去的时候，此时主机宕机，哨兵会发现主机宕机，并且选举一个slave变成master，而此时新的master中实际上并没有锁信息，此时锁信息就已经丢掉了。
+
+为了解决这个问题，redission提出来了MutiLock锁，使用这把锁咱们就不使用主从了，每个节点的地位都是一样的， 这把锁加锁的逻辑需要写入到每一个主丛节点上，只有所有的服务器都写入成功，此时才是加锁成功，假设现在某个节点挂了，那么他去获得锁的时候，只要有一个节点拿不到，都不能算是加锁成功，就保证了加锁的可靠性。
 
 另外创建两个redis server
 ```bash
@@ -1487,6 +1530,52 @@ class RedissonTest {
 
 # 案例: 基于Redis完成秒杀资格判断
 
+
+```mermaid
+sequenceDiagram
+participant postman
+    participant 前端
+    participant 客户端
+    participant Lua脚本
+    participant BlockingQueue
+
+客户端->>客户端: 入口: 暴露代理对象 @EnableAspectJAutoProxy(exposeProxy = true)
+postman->>客户端: 新增优惠券 <br>/voucher/seckill
+前端->>客户端: 下单: 提交优惠券id <br>/voucher-order/seckill/{id}
+客户端->>客户端: 保存秒杀库存到Redis中<br>hash类型(开始、结束时间、库存)
+客户端->>Lua脚本: 调用脚本<br>传入voucherId.toString(), userId.toString()
+Lua脚本->>Lua脚本: 判断开始、结束时间、库存<br> hget seckillKey stockKey
+Lua脚本->>Lua脚本: 判断用户是否下过单<br>这边是用set类型<br> sismember orderKey userId
+Lua脚本->>Lua脚本: 扣库存<br>  hincrby seckillKey stockKey -1
+Lua脚本->>Lua脚本: 下单(保存用户)<br> sadd orderKey userId
+Lua脚本->>客户端: 返回状态 Objects.requireNonNull(execute).intValue();
+客户端->>客户端: i == 0 创建订单id 返回订单id
+客户端->>BlockingQueue: 有购买资格,把下单信息保存到voucherOrder<br>然后保存到阻塞队列 (后面创建订单用)
+客户端->>客户端: 获取代理对象 <br>(原本是 this.createVoucherOrder() <br>这个方法有事务管理，用this 事务会失效)
+客户端->>前端: 返回订单id <br>Result.ok(orderId)
+```
+
+```mermaid
+sequenceDiagram
+    participant 客户端
+    participant BlockingQueue
+    participant ExecutorService
+    participant 数据库
+
+客户端->>客户端: 设置当前类初始化就执行任务 @PostConstruct
+客户端->>ExecutorService: 提交任务
+ExecutorService->>BlockingQueue: 获取队列中订单信息
+ExecutorService->>ExecutorService: 创建订单前
+ExecutorService->>ExecutorService: 获取用户<br>UserHolder.getUser().getId()<br>因为现在是子线程 是拿不到ThreadLocal
+ExecutorService->>ExecutorService: 创建锁对象 <br>redissonClient.getLock(key)
+ExecutorService->>ExecutorService: 尝试获取锁<br>lock.tryLock()
+ExecutorService->>ExecutorService: 判断是否获取锁成功
+ExecutorService->>ExecutorService: 否: log.error("不允许重复下单")
+ExecutorService->>数据库: 查询订单、扣减库存、创建订单
+ExecutorService->>ExecutorService:  因为是异步，所以不用返回信息给用户了
+ExecutorService->>ExecutorService:  释放锁
+```
+
 改进秒杀业务,提高并发性能
 需求:
 1. 新增秒杀优惠券的同时,将优惠券信息保存到Redis中
@@ -1659,7 +1748,7 @@ import java.util.concurrent.locks.ReentrantLock;
  * @since 2021-12-22
  */
 @Service
-public class IVoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, VoucherOrder> implements IVoucherOrderService {
+public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, VoucherOrder> implements IVoucherOrderService {
 
     @Resource
     private ISeckillVoucherService seckillVoucherService;
@@ -1791,7 +1880,7 @@ import java.util.concurrent.locks.ReentrantLock;
  */
 @Slf4j
 @Service
-public class IVoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, VoucherOrder> implements IVoucherOrderService {
+public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, VoucherOrder> implements IVoucherOrderService {
 
     @Resource
     private ISeckillVoucherService seckillVoucherService;
@@ -2331,7 +2420,7 @@ import java.util.concurrent.locks.ReentrantLock;
  */
 @Slf4j
 @Service
-public class IVoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, VoucherOrder> implements IVoucherOrderService {
+public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, VoucherOrder> implements IVoucherOrderService {
 
     @Resource
     private ISeckillVoucherService seckillVoucherService;
