@@ -17,4 +17,7 @@ public class RedisConstants {
 
     // 优惠券
     public static final String SECKILL_STOCK_KEY = "seckill:stock:";
+
+    //  达人探店
+    public static final String BLOG_LIKED_KEY = "blog:liked:";
 }
