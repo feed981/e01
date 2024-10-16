@@ -1036,3 +1036,23 @@ sequenceDiagram
 	前端->>前端: 改变点赞前后的颜色<br>:fill=blog.isLike ? ff6633 : 82848a
     
 ```
+
+是否对这篇博文点赞 /blog/like/{id}
+```mermaid
+sequenceDiagram
+    participant 前端
+    participant 客户端
+    participant Redis
+    participant 数据库
+
+	前端->>客户端: 查看是否对这篇博文点赞 /blog/like/{id}
+    客户端->>客户端: 获取登陆用户<br>UserHolder.getUser().getId()
+客户端->>Redis: ZSCORE <br>key: 博文id blog:liked:blogId <br>value: 当前用户
+客户端->>客户端: 如果未点赞，可以点赞
+客户端->>数据库: 数据库点赞数+1 <br> update tb_blog set liked = liked + 1 where id = ?
+客户端->>Redis: ZADD <br>key: 博文id blog:liked:blogId <br>value: 当前用户<br> 时间戳
+客户端->>客户端: 如果已点赞，取消点赞 
+客户端->>数据库: 数据库点赞数-1 <br> update tb_blog set liked = liked - 1 where id = ?
+客户端->>Redis: ZREM  <br>key: 博文id blog:liked:blogId <br>value: 当前用户
+客户端->>前端: 返回 Result.ok()
+```
