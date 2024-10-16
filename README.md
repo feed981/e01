@@ -1056,3 +1056,24 @@ sequenceDiagram
 客户端->>Redis: ZREM  <br>key: 博文id blog:liked:blogId <br>value: 当前用户
 客户端->>前端: 返回 Result.ok()
 ```
+
+点赞排行榜: 针对这篇博文点过赞的人排序，最先点赞的top 5 会显示在最前面 /blog/likes/{id}
+
+```mermaid
+sequenceDiagram
+    participant 前端
+    participant 客户端
+    participant Redis
+    participant 数据库
+
+	前端->>客户端: 点赞排行榜 /blog/likes/{id}
+客户端->>Redis: ZRANGE  <br>key: 博文id blog:liked:blogId 0 4
+客户端->>客户端: reids null 或空
+客户端->>前端: 返回 空集合
+客户端->>客户端: reids 有值
+客户端->>客户端: 解析用户id <br>redis返回 set to list <br> id String to long
+客户端->>客户端: 串成ex: 5,1 <br> idStr = StrUtil.join(",", ids)
+客户端->>数据库: 根据用户id 查询 WHERE id IN (5, 1) <br> 要保持redis 当前顺序就需要在sql 加上 ORDER BY FIELD(id, idStr)
+客户端->>客户端: 避免用户敏感信息<br>查完后将top5 用户信息转userDTO 
+客户端->>前端: 返回数据 Result.ok(userDTOS)
+```
