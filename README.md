@@ -758,39 +758,6 @@ public class BlogServiceImpl extends ServiceImpl<BlogMapper, Blog> implements IB
 
 # 点赞排行榜
 
-查詢熱門博客文 /api/blog/hot
-```mermaid
-sequenceDiagram
-    participant 前端
-    participant 客户端
-    participant Redis
-    participant 数据库
-
-	前端->>客户端: 查詢熱門博客文<br>/api/blog/hot
-	客户端->>数据库: 因为是热点博文所以需要按liked 排序
-    客户端->>客户端: 获取当前页数据 Page
-    客户端->>客户端: 博文也需要显示用户信息所以查询用户<br> records.forEach(blog ->{ <br>this.queryBlogUser(blog)} 
-    客户端->>客户端: entity Blog<br>加上 @TableField(exist = false) <br>因为用户信息不存在于 tb_blog 这数据库表表中
-    客户端->>客户端: 判断当前登录用户是否已经点赞<br>records.forEach(blog ->{<br>this.isBlogLiked(blog)}
-    客户端->>Redis: ZSCORE <br>key: 博文id blog:liked:blogId <br>value: 当前用户UserHolder.getUser().getId()
-    前端->>前端: 改变点赞前后的颜色<br>:fill=blog.isLike ? ff6633 : 82848a
-```
-点博文查看里面内容 /api/blog/{id}
-```mermaid
-sequenceDiagram
-    participant 前端
-    participant 客户端
-    participant Redis
-    participant 数据库
-    
-    前端->>客户端: 点博文查看里面内容 /api/blog/{id}
-    客户端->>数据库: 根据id 查找数据库
-    客户端->>前端: null 返回笔记不存在
-    客户端->>客户端: 1. 用户信息 <br>queryBlogUser(blog)<br>2. 当前用户是否点过这篇博文的赞<br>isBlogLiked(blog)
-    客户端->>前端: 返回博文信息
-    
-```
-
 List RPUSH 
 - 最早的会在最前面
 - 不唯一 
@@ -1028,4 +995,44 @@ where id = 1011;
     "icon": ""
   }
 ]
+```
+
+# 总结 
+
+
+查詢熱門博客文 /api/blog/hot
+```mermaid
+sequenceDiagram
+    participant 前端
+    participant 客户端
+    participant Redis
+    participant 数据库
+
+	前端->>客户端: 查詢熱門博客文<br>/api/blog/hot
+	客户端->>数据库: 因为是热点博文所以需要按liked 排序
+    客户端->>客户端: 获取当前页数据 Page
+    客户端->>客户端: 博文也需要显示用户信息所以查询用户<br> records.forEach(blog ->{ <br>this.queryBlogUser(blog)} 
+    客户端->>客户端: entity Blog<br>加上 @TableField(exist = false) <br>因为用户信息不存在于 tb_blog 这数据库表表中
+    客户端->>客户端: 判断当前登录用户是否已经点赞<br>records.forEach(blog ->{<br>this.isBlogLiked(blog)}
+    客户端->>Redis: ZSCORE <br>key: 博文id blog:liked:blogId <br>value: 当前用户UserHolder.getUser().getId()
+客户端->>前端: 返回数据	Result.ok(records)
+    前端->>前端: 改变点赞前后的颜色<br>:fill=blog.isLike ? ff6633 : 82848a
+```
+点博文查看里面内容 /api/blog/{id}
+```mermaid
+sequenceDiagram
+    participant 前端
+    participant 客户端
+    participant Redis
+    participant 数据库
+    
+    前端->>客户端: 点博文查看里面内容 /api/blog/{id}
+    客户端->>数据库: 根据id 查找数据库
+    客户端->>前端: null 返回笔记不存在
+    客户端->>客户端: 博文也需要显示用户信息所以查询用户<br>queryBlogUser(blog)
+    客户端->>客户端: 判断当前登录用户是否已经点赞<br>isBlogLiked(blog)
+    客户端->>Redis: ZSCORE <br>key: 博文id blog:liked:blogId <br>value: 当前用户UserHolder.getUser().getId()
+    客户端->>前端: 返回数据 Result.ok(blog)
+	前端->>前端: 改变点赞前后的颜色<br>:fill=blog.isLike ? ff6633 : 82848a
+    
 ```
