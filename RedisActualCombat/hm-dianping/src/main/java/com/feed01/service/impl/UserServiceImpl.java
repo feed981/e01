@@ -12,6 +12,7 @@ import com.feed01.mapper.UserMapper;
 import com.feed01.service.IUserService;
 import com.feed01.utils.RedisConstants;
 import com.feed01.utils.RegexUtils;
+import com.feed01.utils.UserHolder;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
@@ -157,6 +158,15 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements IU
 //        log.info("user2={}",user2);
         return user;
     }
+
+    @Override
+    public Result logout(String token) {
+        String tokenKey = RedisConstants.LOGIN_USER_KEY + token;
+        stringRedisTemplate.delete(tokenKey);
+        UserHolder.removeUser();
+        return Result.ok("已退出登录");
+    }
+
     @Override
     public Result loginCreateTestuser() {
         int howManyTestUser = 10;

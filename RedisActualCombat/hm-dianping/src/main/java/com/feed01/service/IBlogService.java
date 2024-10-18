@@ -22,4 +22,9 @@ public interface IBlogService extends IService<Blog> {
     Result likeBlog_zset(Long id);
 
     Result queryBlogLikes(Long id);
+
+    Result saveBolg(Blog blog);
+
+    Result queryBlogOfFollow(Long max, Integer offset);
+
 }

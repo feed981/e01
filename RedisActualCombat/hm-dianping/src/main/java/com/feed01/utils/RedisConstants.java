@@ -20,4 +20,7 @@ public class RedisConstants {
 
     //  达人探店
     public static final String BLOG_LIKED_KEY = "blog:liked:";
+
+    // 推送
+    public static final String FEED_KEY = "feeds:";
 }

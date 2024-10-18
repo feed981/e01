@@ -30,7 +30,8 @@ public class MvcConfig implements WebMvcConfigurer {
                         "/upload/**", //上传通常是登入才能，但目前测试需要先放行
                         "/user/code",
                         "/user/login"
-                        ,"/user/login-createTestuser" // 个人api 新增用户压测用
+                        ,"/user/login-createTestuser" // 个人 新增用户压测用
+                        ,"/blog/upload/old/of/follow" // 个人 推送关注
                 ).order(1);
     }
 }

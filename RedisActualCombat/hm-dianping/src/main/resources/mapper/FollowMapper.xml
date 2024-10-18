@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.feed01.mapper.FollowMapper">
+    <select id="queryAllBlogTheUsersWhoFollow" resultType="com.feed01.po.BlogTheUsersWhoFollow">
+        select tb.id ,tb.user_id as follow_user_id ,tf.user_id
+        from tb_blog tb
+        right join tb_follow tf on tf.follow_user_id = tb.user_id
+        where 1=1
+        and tb.update_time &gt; 0
+        <!--        <if test="params.startTime != null and params.endTime != null">-->
+        <!--            and tb.update_time BETWEEN #{params.startTime} AND #{params.endTime}-->
+        <!--        </if>-->
+        order by tb.id desc;
+    </select>
+
+    <select id="queryBlogIdTheUserWhoFollow" resultType="java.lang.Long" parameterType="java.lang.Long">
+        select tb.id
+        from tb_blog tb
+        left join tb_follow tf on tf.follow_user_id = tb.user_id
+        where 1=1
+        <if test="userId != null">
+            and tf.user_id = #{userId}
+        </if>
+<!--        <if test="params.startTime != null and params.endTime != null">-->
+<!--            and tb.update_time BETWEEN #{params.startTime} AND #{params.endTime}-->
+<!--        </if>-->
+        order by tb.id desc;
+    </select>
+</mapper>

@@ -23,4 +23,6 @@ public interface IUserService extends IService<User> {
     Result login_redis(LoginFormDTO loginForm, HttpSession session);
 
     Result loginCreateTestuser();
+
+    Result logout(String token);
 }
