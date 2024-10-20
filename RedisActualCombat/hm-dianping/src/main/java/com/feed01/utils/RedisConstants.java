@@ -23,4 +23,7 @@ public class RedisConstants {
 
     // 推送
     public static final String FEED_KEY = "feeds:";
+
+    // 附近商铺
+    public static final String SHOP_GEO_KEY = "shop:geo:";
 }
