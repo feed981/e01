@@ -1,375 +1,98 @@
-# 用户签到
-# BitMap功能演示
-我们按月来统计用户签到信息,签到记录为1,未签到则记录为0.
 
-把每一个bit位对应当月的每一天,形成了映射关系。用0和1标示业务状态,这种思路就称为位图(BitMap)
-
-Redis中是利用string类型数据结构实现BitMap,因此最大上限是512M,转换为bit则是 2^32个bit位。
-
-## BitMap用法
-
-Redis中是利用string类型数据结构实现BitMap,因此最大上限是512M,转换为bit则是 2^32个bit位。
-BitMap的操作命令有:
+# UV统计
 
 
-| Column 1 | Column 2 | 
-| -------- | -------- | 
-| SETBIT     | 向指定位置(offset)存入一个0或1| 
-| GETBIT     |获取指定位置(offset)的bit值|
-|BITCOUNT |统计BitMap中值为1的bit位的数量|
-|BITFIELD|操作(查询、修改、自增)BitMap中bit数组中的指定位置(offset)的值|
-|BITFIELD_RO|获取BitMap中bit数组,并以十进制形式返回|
-|BITOP|将多个BitMap的结果做位运算(与、或、异或)
-BITPOS|查找bit数组中指定范围内第一个0或1出现的位置|
+# UV PV
+首先我们搞懂两个概念:
 
-```bash 
-# 0 第一天签到
-192.168.33.10:6379> SETBIT bm1 0 1
-(integer) 0
+## Unique Visitor(UV)
 
-# 1 第二天签到
-192.168.33.10:6379> SETBIT bm1 1 1
-(integer) 0
+也叫独立访客量,是指通过互联网访问、浏览这个网页的自然人。1天内同一个用户多次访问该网站,只记录1次。
 
-192.168.33.10:6379> SETBIT bm1 2 1
-(integer) 0
+## Page View(PV)
 
-# 没签到默认就会给 0 所以不用特别SET 
-# ex: 3 0 代表第四天未签
+也叫页面访问量或点击量,用户每访问网站的一个页面,记录1次PV,用户多次打开页面,则记录多次PV。往往用来衡量网站的流量。
 
-# 1 第五天签到
-192.168.33.10:6379> SETBIT bm1 6 1
-(integer) 0
+UV统计在服务端做会比较麻烦,因为要判断该用户是否已经统计过了,需要将统计过的用户信息保存。但是如果每个访问的用户都保存到Redis中,数据量会非常恐怖。
 
-# 1 第十一天签到
-192.168.33.10:6379> SETBIT bm1 12 1
-(integer) 0
+# HyperLogLog的用法
+Hyperloglog(HLL)是从Loglog算法派生的概率算法,用于确定非常大的集合的基数,而不需要存储其所有值。
 
-# 查看第一天是否签到 1 代表有签
-192.168.33.10:6379> GETBIT bm1 2
+相关算法原理大家可以参考: 
+https://juejin.cn/post/6844903785744056333#heading-0
+
+Redis中的HLL是基于string结构实现的,单个HLL的内存永远小于16kb,内存占用低的令人发指!作为代价,其测量结果是概率性的,有小于0.81%的误差。不过对于UV统计来说,这完全可以忽略。
+
+```bash
+# 加入
+192.168.33.10:6379> PFADD hl1 e1 e2 e3 e4 e5 e6
 (integer) 1
 
-# 二进制转十进制
-192.168.33.10:6379> BITFIELD bm1 GET u2 0
-1) (integer) 3
-192.168.33.10:6379> BITFIELD bm1 GET u3 0
-1) (integer) 7
+# 得到数量
+192.168.33.10:6379> PFCOUNT hl1
+(integer) 6
 
-# 找到第一个未签
-192.168.33.10:6379> BITPOS bm1 0
-(integer) 3
-
-# 找到第一个有签
-192.168.33.10:6379> BITPOS bm1 1
+# 重复加入
+192.168.33.10:6379> PFADD hl1 e1 e2 e3 e4 e5 e6
 (integer) 0
+192.168.33.10:6379> PFADD hl1 e1 e2 e3 e4 e5 e6
+(integer) 0
+
+# 得到数量
+192.168.33.10:6379> PFCOUNT hl1
+(integer) 6
+
 ```
+# 测试百万数据的统计
 
-
-# 实现签到功能
-
-当前用户当天签到、补签
 
 ```bash 
-192.168.33.10:6379> SETBIT sign:1011:202410 15 1
-(integer) 0
+# 内存
+192.168.33.10:6379> INFO MEMORY
+# Memory
+used_memory:1582440
 ```
-
+单元测试
+每1000条放到数组后发送一次
 ```java 
-package com.hmdp.service.impl;
+package com.feed01;
 
-import cn.hutool.core.bean.BeanUtil;
-import cn.hutool.core.bean.copier.CopyOptions;
-import cn.hutool.core.util.RandomUtil;
-import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
-import com.hmdp.dto.LoginFormDTO;
-import com.hmdp.dto.Result;
-import com.hmdp.dto.UserDTO;
-import com.hmdp.entity.User;
-import com.hmdp.mapper.UserMapper;
-import com.hmdp.service.IUserService;
-import com.hmdp.utils.RedisConstants;
-import com.hmdp.utils.RegexUtils;
-import com.hmdp.utils.BeanUtils;
-import com.hmdp.utils.UserHolder;
-import lombok.extern.slf4j.Slf4j;
+
+import org.junit.jupiter.api.Test;
+import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.data.redis.core.StringRedisTemplate;
-import org.springframework.stereotype.Service;
 
 import javax.annotation.Resource;
-import javax.servlet.http.HttpSession;
-import java.lang.reflect.InvocationTargetException;
-import java.time.LocalDateTime;
-import java.time.format.DateTimeFormatter;
-import java.util.*;
-import java.util.concurrent.TimeUnit;
-import java.util.stream.IntStream;
+import java.util.Properties;
 
-import static com.hmdp.utils.RedisConstants.*;
-import static com.hmdp.utils.SystemConstants.USER_NICK_NAME_PREFIX;
-
-import java.io.BufferedWriter;
-import java.io.FileWriter;
-import java.io.IOException;
-import java.util.ArrayList;
-import java.util.List;
-
-/**
- * <p>
- * 服务实现类
- * </p>
- *
- * @author 虎哥
- * @since 2021-12-22
- */
-@Slf4j
-@Service
-public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements IUserService {
+@SpringBootTest
+public class UVTest {
 
     @Resource
     private StringRedisTemplate stringRedisTemplate;
-
-    
-
-    @Override
-    public Result sign() {
-        // 1.获取当前登录用户
-        Long userId = UserHolder.getUser().getId();
-
-        // 2.获取日期
-        LocalDateTime now = LocalDateTime.now();
-
-        // 3.拼接key
-        String keySuffix = now.format(DateTimeFormatter.ofPattern(":yyyyMM"));
-        String key = USER_SIGN_KEY + userId + keySuffix;
-
-        // 4.获取今天是本月的第几天
-        int dayOfMonth = now.getDayOfMonth();
-
-        // 5.写入Redis SETBIT key offset 1
-        stringRedisTemplate.opsForValue().setBit(key ,dayOfMonth - 1, true);
-
-        return Result.ok();
-    }
-
-    @Override
-    public Result resign(String yyyy, String MM, String dd) {
-        // 1.获取当前登录用户
-        Long userId = UserHolder.getUser().getId();
-
-        // 2.获取当天日期
-        LocalDateTime now = LocalDateTime.now();
-
-        // 3.拼接key
-        String keySuffix = ":" + yyyy + MM;
-        String key = USER_SIGN_KEY + userId + keySuffix;
-
-        // 4.获取今天是本月的第几天
-        int nowdayOfMonth = now.getDayOfMonth();
-        if( Integer.parseInt(dd) >= nowdayOfMonth){
-            return Result.fail("无法补签");
-        }
-
-        int dayOfMonth = Integer.parseInt(dd);
-
-        // 5.写入Redis SETBIT key offset 1
-        stringRedisTemplate.opsForValue().setBit(key ,dayOfMonth - 1, true);
-
-        return Result.ok();
-    }
-
-}
-
-```
-```java 
-package com.hmdp.controller;
-
-import cn.hutool.core.bean.BeanUtil;
-import com.hmdp.dto.LoginFormDTO;
-import com.hmdp.dto.Result;
-import com.hmdp.dto.UserDTO;
-import com.hmdp.entity.User;
-import com.hmdp.entity.UserInfo;
-import com.hmdp.service.IUserInfoService;
-import com.hmdp.service.IUserService;
-import com.hmdp.utils.RedisConstants;
-import com.hmdp.utils.UserHolder;
-import lombok.extern.slf4j.Slf4j;
-import org.springframework.web.bind.annotation.*;
-
-import javax.annotation.Resource;
-import javax.servlet.http.HttpServletRequest;
-import javax.servlet.http.HttpSession;
-
-/**
- * <p>
- * 前端控制器
- * </p>
- *
- * @author 虎哥
- * @since 2021-12-22
- */
-@Slf4j
-@RestController
-@RequestMapping("/user")
-public class UserController {
-
-    @Resource
-    private IUserService userService;
-
-    @PostMapping("/sign")
-    public Result sign(){
-        return userService.sign();
-    }
-
-    // 补签 SETBIT sign:1011:202410 15 1
-    @PostMapping("/resign/{yyyy}/{MM}/{dd}")
-    public Result resign(@PathVariable("yyyy") String yyyy,
-                         @PathVariable("MM") String MM,
-                         @PathVariable("dd") String dd){
-        return userService.resign(yyyy,MM,dd);
-    }
-}
-
-```
-|请求头token|authorization|2468ffeb-0341-4a7d-a031-0bf78850a00e|
-|--------| -------- | -------- | 
-|签到|POST|http://localhost:8080/api/user/sign|
-|补签|POST|http://localhost:8080/api/user/resign/2024/10/15|
-
-# 统计连续签到
-
-
-问题1:什么叫做连续签到天数?
-
-从最后一次签到开始向前统计,直到遇到第一次未签到为止,计算总的签到次数,就是连续签到天数。
-
-问题2:如何得到本月到今天为止的所有签到数据?
-
-BITFIELD key GET u[dayOfMonth] 0
-
-问题3:如何从后向前遍历每个bit位?
-
-与1做与运算,就能得到最后一个bit位。
-
-随后右移1位,下一个bit位就成为了最后一个bit位。
-
-```bash 
-192.168.33.10:6379> BITFIELD sign:1011:202410 GET u21 0
-1) (integer) 1050625
-```
-
-```java 
-package com.hmdp.service.impl;
-
-import cn.hutool.core.bean.BeanUtil;
-import cn.hutool.core.bean.copier.CopyOptions;
-import cn.hutool.core.util.RandomUtil;
-import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
-import com.hmdp.dto.LoginFormDTO;
-import com.hmdp.dto.Result;
-import com.hmdp.dto.UserDTO;
-import com.hmdp.entity.User;
-import com.hmdp.mapper.UserMapper;
-import com.hmdp.service.IUserService;
-import com.hmdp.utils.RedisConstants;
-import com.hmdp.utils.RegexUtils;
-import com.hmdp.utils.BeanUtils;
-import com.hmdp.utils.UserHolder;
-import lombok.extern.slf4j.Slf4j;
-import org.springframework.data.redis.core.StringRedisTemplate;
-import org.springframework.stereotype.Service;
-
-import javax.annotation.Resource;
-import javax.servlet.http.HttpSession;
-import java.lang.reflect.InvocationTargetException;
-import java.time.LocalDateTime;
-import java.time.format.DateTimeFormatter;
-import java.util.*;
-import java.util.concurrent.TimeUnit;
-import java.util.stream.IntStream;
-
-import static com.hmdp.utils.RedisConstants.*;
-import static com.hmdp.utils.SystemConstants.USER_NICK_NAME_PREFIX;
-
-import java.io.BufferedWriter;
-import java.io.FileWriter;
-import java.io.IOException;
-import java.util.ArrayList;
-import java.util.List;
-
-/**
- * <p>
- * 服务实现类
- * </p>
- *
- * @author 虎哥
- * @since 2021-12-22
- */
-@Slf4j
-@Service
-public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements IUserService {
-
-    @Resource
-    private StringRedisTemplate stringRedisTemplate;
-
-    @Override
-    public Result signCount() {
-        // 1.获取当前登录用户
-        Long userId = UserHolder.getUser().getId();
-
-        // 2.获取日期
-        LocalDateTime now = LocalDateTime.now();
-
-        // 3.拼接key
-        String keySuffix = now.format(DateTimeFormatter.ofPattern(":yyyyMM"));
-        String key = USER_SIGN_KEY + userId + keySuffix;
-
-        // 4.获取今天是本月的第几天
-        int dayOfMonth = now.getDayOfMonth();
-
-        // 5.获取本月截止今天为止的所有的签到记录,返回的是一个十进制的数字
-        // BITFIELD sign:1011:202410 GET u21 0
-        List<Long> result = stringRedisTemplate.opsForValue().bitField(
-                key,
-                BitFieldSubCommands.create() // 子命令 GET SET INCR...
-                        .get(BitFieldSubCommands.BitFieldType.unsigned(dayOfMonth)) // 哪一天 = dayOfMonth , 有无符号 u = BitFieldSubCommands.BitFieldType.unsigned
-                        .valueAt(0) // offset 从几开始
-        );
-        if(result == null || result.isEmpty()){
-            return Result.ok(0);
-        }
-        Long num = result.get(0);
-        if(num == null || num ==0){
-            return Result.ok(0);
-        }
-
-        // 6.循环遍历
-        int count = 0;
-        while (true){
-
-        // 6.1.让这个数字1做与运算,得到数字的最后一个bit位
-        // 判断这个bit位是否为
-            if((num & 1) == 0){
-                // 如果为0,说明未签到,结束
-                break;
-            }else{
-                // 如果不为,说明已签到,计数器+1
-                count++;
+    @Test
+    void hyperLog(){
+        String [] values = new String[1000];
+        int j = 0;
+        for (int i = 0 ;i < 1000000 ;i++){
+            // 每1000条发送一次
+            j = i % 1000;
+            values[j] = "user_" + i;
+            if(j == 999){
+               
+                // PFADD hl2 数组
+                stringRedisTemplate.opsForHyperLogLog().add("hl2",values);
             }
-            // 把数字右移一位,抛弃最后一个bit位,继续下一个bit位
-            num >>>= 1;
         }
-        return Result.ok(count);
+        // 统计数量 PFCOUNT hl2
+        Long hl2 = stringRedisTemplate.opsForHyperLogLog().size("hl2");
+        System.out.println(hl2);
+    }
+
+    // 内存
+    void used_memory(){
+        Properties info = stringRedisTemplate.getRequiredConnectionFactory().getConnection().info("memory");
+        System.out.println("Used Memory: " + info.getProperty("used_memory"));
     }
 }
 ```
-
-|请求头token|authorization|2468ffeb-0341-4a7d-a031-0bf78850a00e||
-|--------| -------- | -------- | -------- | 
-|补签|POST|http://localhost:8080/api/user/resign/2024/10/19||
-|补签|POST|http://localhost:8080/api/user/resign/2024/10/20||
-|补签|POST|http://localhost:8080/api/user/resign/2024/10/21||
-|统计连续签到|GET|http://localhost:8080/api/user/sign/count|{"success": true,"data": 2}|
-
-
-
