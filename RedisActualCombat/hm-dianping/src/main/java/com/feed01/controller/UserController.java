@@ -89,4 +89,23 @@ public class UserController {
         return userService.loginCreateTestuser();
     }
 
+
+    @PostMapping("/sign")
+    public Result sign(){
+        return userService.sign();
+    }
+
+    // 补签
+    @PostMapping("/resign/{yyyy}/{MM}/{dd}")
+    public Result resign(@PathVariable("yyyy") String yyyy,
+                         @PathVariable("MM") String MM,
+                         @PathVariable("dd") String dd){
+        return userService.resign(yyyy,MM,dd);
+    }
+
+    @GetMapping("/sign/count")
+    public Result signCount(){
+        return userService.signCount();
+    }
+
 }

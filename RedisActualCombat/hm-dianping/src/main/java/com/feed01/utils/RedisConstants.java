@@ -26,4 +26,7 @@ public class RedisConstants {
 
     // 附近商铺
     public static final String SHOP_GEO_KEY = "shop:geo:";
+
+    // 签到
+    public static final String USER_SIGN_KEY = "sign:";
 }
