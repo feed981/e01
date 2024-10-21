@@ -11,7 +11,7 @@ import javax.annotation.Resource;
 import java.util.concurrent.TimeUnit;
 
 @SpringBootTest
-class HmDianPingApplicationTests {
+class ShopCacheTest {
 
     @Resource
     private CacheClient cacheClient;
